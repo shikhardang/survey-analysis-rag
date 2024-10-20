@@ -1,0 +1,10 @@
+fastapi==0.95.1
+uvicorn==0.22.0
+pandas==2.0.3
+numpy==1.25.2
+openai==0.27.7
+python-dotenv==1.0.0
+faiss-cpu==1.7.3
+sentence-transformers==2.2.2
+tiktoken==0.4.0
+huggingface_hub==0.13.3
