@@ -36,7 +36,7 @@ services:
       backend:
         condition: service_healthy
     environment:
-      - NEXT_PUBLIC_BACKEND_URL=http://backend:8000
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
     networks:
       - app-network
     healthcheck:
