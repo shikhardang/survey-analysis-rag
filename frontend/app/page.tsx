@@ -71,7 +71,7 @@ export default function Home() {
     setError('');
 
     try {
-      const response = await fetch('https://survey-analysis-rag.onrender.com:8000/chat', {
+      const response = await fetch('https://localhost:8000/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
