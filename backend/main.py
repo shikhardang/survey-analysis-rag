@@ -22,7 +22,8 @@ app = FastAPI()
 # Enable CORS to allow requests from the frontend
 origins = [
     "http://localhost:3000",   # Your frontend origin
-    "http://127.0.0.1:3000"    # Include if you access via 127.0.0.1
+    "http://127.0.0.1:3000",    # Include if you access via 127.0.0.1
+    "https://survey-analysis-rag.vercel.app"  # Your Vercel deployment URL
 ]
 app.add_middleware(
     CORSMiddleware,
