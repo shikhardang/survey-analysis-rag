@@ -17,8 +17,8 @@ services:
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "https://survey-analysis-rag.onrender.com/docs"]
-      #test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      #test: ["CMD", "curl", "-f", "https://survey-analysis-rag.onrender.com/docs"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -37,13 +37,13 @@ services:
       backend:
         condition: service_healthy
     environment:
-      - NEXT_PUBLIC_BACKEND_URL=https://survey-analysis-rag.onrender.com:8000
-      #- NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+      #- NEXT_PUBLIC_BACKEND_URL=https://survey-analysis-rag.onrender.com:8000
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
     networks:
       - app-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "https://survey-analysis-rag-o278.vercel.app:3000"]
-      #test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      #test: ["CMD", "curl", "-f", "https://survey-analysis-rag-o278.vercel.app:3000"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s
       timeout: 10s
       retries: 3

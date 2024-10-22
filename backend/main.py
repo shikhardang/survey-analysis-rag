@@ -21,9 +21,7 @@ app = FastAPI()
 
 # Enable CORS to allow requests from the frontend
 origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "https://survey-analysis-rag-o278.vercel.app:3000"        # Your frontend origin
+    "http://localhost:3000",   # Your frontend origin
     "http://127.0.0.1:3000"    # Include if you access via 127.0.0.1
 ]
 app.add_middleware(
@@ -41,43 +39,23 @@ logging.basicConfig(level=logging.INFO)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Initialize SentenceTransformer model
-embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-
-# Initialize global variables for datasets and FAISS indices
-datasets: Dict[str, pd.DataFrame] = {}
-embeddings: Dict[str, np.ndarray] = {}
-indices: Dict[str, faiss.IndexFlatL2] = {}
+embedding_model = None  # Load on demand to save memory
 
 # Parameters
 NUM_SIMILAR_COLUMNS = 5  # Number of similar columns to retrieve
 NUM_SUMMARY_RECORDS = 5  # Number of records to use for summarization
 
-# FastAPI startup event to initialize models and indices
+def load_embedding_model():
+    global embedding_model
+    if embedding_model is None:
+        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        embedding_model.eval()
+
+# FastAPI startup event to validate data directory
 @app.on_event("startup")
 async def startup_event():
-    global datasets, embeddings, indices
-
     data_directory = "data"
-
-    # Load all CSV files in the data directory
-    try:
-        for filename in os.listdir(data_directory):
-            if filename.endswith(".csv"):
-                dataset_name = filename[:-4]  # Remove .csv extension
-                file_path = os.path.join(data_directory, filename)
-                df = pd.read_csv(file_path, encoding="ISO-8859-1")
-                datasets[dataset_name] = df
-
-                # Create embeddings for dataset columns
-                column_embeddings = embedding_model.encode(df.columns.tolist(), convert_to_tensor=False)
-                embeddings[dataset_name] = column_embeddings
-
-                # Build FAISS index
-                index = create_faiss_index(np.array(column_embeddings))
-                indices[dataset_name] = index
-
-                logging.info(f"Dataset '{dataset_name}' loaded and indexed.")
-    except FileNotFoundError:
+    if not os.path.exists(data_directory):
         logging.error(f"Data directory '{data_directory}' not found. Ensure it contains the CSV files.")
         raise RuntimeError(f"Data directory '{data_directory}' not found.")
 
@@ -99,6 +77,9 @@ async def chat(chat_request: ChatRequest):
                 "source_data": None
             }
 
+        # Load embedding model on demand
+        load_embedding_model()
+
         # Encode the query
         logging.info(f"Encoding query: {query_text}")
         query_embedding = embedding_model.encode([query_text], convert_to_tensor=False)[0].reshape(1, -1)
@@ -106,18 +87,35 @@ async def chat(chat_request: ChatRequest):
         retrieved_data = {}
 
         # Iterate over all datasets
-        for dataset_name, df in datasets.items():
-            # Retrieve similar columns
-            distances, indices_list = indices[dataset_name].search(query_embedding, NUM_SIMILAR_COLUMNS)
-            similar_columns = df.columns[indices_list.flatten()].tolist()
+        data_directory = "data"
+        for filename in os.listdir(data_directory):
+            if filename.endswith(".csv"):
+                dataset_name = filename[:-4]  # Remove .csv extension
+                file_path = os.path.join(data_directory, filename)
+                df = pd.read_csv(file_path, encoding="ISO-8859-1")
 
-            # Summarize data
-            data_summary = summarize_data(df, similar_columns, num_records=NUM_SUMMARY_RECORDS)
+                # Create embeddings for dataset columns
+                column_embeddings = embedding_model.encode(df.columns.tolist(), convert_to_tensor=False)
 
-            retrieved_data[dataset_name] = {
-                "columns": similar_columns,
-                "data_summary": data_summary
-            }
+                # Build FAISS index on demand
+                index = create_faiss_index(np.array(column_embeddings))
+
+                # Retrieve similar columns
+                distances, indices_list = index.search(query_embedding, NUM_SIMILAR_COLUMNS)
+                similar_columns = df.columns[indices_list.flatten()].tolist()
+
+                # Summarize data
+                data_summary = summarize_data(df, similar_columns, num_records=NUM_SUMMARY_RECORDS)
+
+                retrieved_data[dataset_name] = {
+                    "columns": similar_columns,
+                    "data_summary": data_summary
+                }
+
+                # Clear memory by deleting large objects
+                del df
+                del column_embeddings
+                del index
 
         # Generate AI response using the specified OpenAI model
         ai_response = await generate_openai_chat(
@@ -169,28 +167,6 @@ async def interpret_query(query_text: str) -> dict:
     except Exception as e:
         logging.error(f"Error interpreting query: {str(e)}")
         return {}
-
-async def analyze_sentiment(text: str) -> str:
-    try:
-        logging.info("Analyzing sentiment...")
-        response = await openai.ChatCompletion.acreate(
-            model="gpt-3.5-turbo",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "You are a sentiment analysis tool. Determine if the sentiment of the following text is Positive, Negative, or Neutral."
-                },
-                {"role": "user", "content": text}
-            ],
-            max_tokens=10,
-            temperature=0.0,
-        )
-        sentiment = response.choices[0].message.content.strip()
-        logging.info(f"Sentiment analysis result: {sentiment}")
-        return sentiment
-    except Exception as e:
-        logging.error(f"Error analyzing sentiment: {str(e)}")
-        return "Unknown"
 
 async def generate_openai_chat(messages: List[Message], retrieved_data: Dict[str, Any], model_name: str, max_tokens: int = 500) -> str:
     try:
@@ -263,13 +239,6 @@ async def generate_openai_chat(messages: List[Message], retrieved_data: Dict[str
         # Extract the assistant's reply
         assistant_reply = response.choices[0].message.content.strip()
         logging.info("AI response generated successfully.")
-
-        # Perform sentiment analysis on the user's last message
-        user_message = messages[-1].content
-        sentiment = await analyze_sentiment(user_message)
-
-        # Include sentiment in the assistant's reply
-        assistant_reply += f"\n\nSentiment of your question: {sentiment}"
 
         return assistant_reply
 
