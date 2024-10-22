@@ -19,10 +19,10 @@ load_dotenv()
 
 app = FastAPI()
 
-# Enable CORS to allow requests from the frontend
+# Enable CORS as the first middleware
 origins = [
     "http://localhost:3000",   # Your frontend origin
-    "http://127.0.0.1:3000",    # Include if you access via 127.0.0.1
+    "http://127.0.0.1:3000",   # Include if you access via 127.0.0.1
     "https://survey-analysis-rag.vercel.app"  # Your Vercel deployment URL
 ]
 app.add_middleware(
@@ -253,10 +253,11 @@ async def generate_openai_chat(messages: List[Message], retrieved_data: Dict[str
         logging.error(f"Error generating AI response: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating AI response: {str(e)}")
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logging.error(f"Unhandled exception: {str(exc)}")
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "An unexpected error occurred. Please try again later."},
-    )
+# Commented Out Global Exception Handler
+# @app.exception_handler(Exception)
+# async def global_exception_handler(request: Request, exc: Exception):
+#     logging.error(f"Unhandled exception: {str(exc)}")
+#     return JSONResponse(
+#         status_code=500,
+#         content={"detail": "An unexpected error occurred. Please try again later."},
+#     )
