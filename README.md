@@ -174,7 +174,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-- **Access API Documentation:** [http://localhost:8000/docs](http://localhost:8000/docs)
+- **Access API Documentation:** [https://survey-analysis-rag.onrender.com/docs](https://survey-analysis-rag.onrender.com/docs)
 
 ### 2. Frontend Setup
 
