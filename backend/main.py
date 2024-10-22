@@ -60,6 +60,11 @@ async def startup_event():
         logging.error(f"Data directory '{data_directory}' not found. Ensure it contains the CSV files.")
         raise RuntimeError(f"Data directory '{data_directory}' not found.")
 
+# Test endpoint to verify CORS
+@app.get("/test")
+async def test_cors():
+    return {"message": "CORS is working!"}
+
 @app.post("/chat")
 async def chat(chat_request: ChatRequest):
     try:
@@ -253,7 +258,7 @@ async def generate_openai_chat(messages: List[Message], retrieved_data: Dict[str
         logging.error(f"Error generating AI response: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating AI response: {str(e)}")
 
-# Commented Out Global Exception Handler
+# Removed the global exception handler to allow CORSMiddleware to function correctly
 # @app.exception_handler(Exception)
 # async def global_exception_handler(request: Request, exc: Exception):
 #     logging.error(f"Unhandled exception: {str(exc)}")
