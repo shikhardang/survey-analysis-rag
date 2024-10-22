@@ -142,7 +142,7 @@ backend/*.sage.py
 backend/.env
 
 # Data files
-backend/data/
+# backend/data/
 frontend/data/
 
 # Editor directories and files
