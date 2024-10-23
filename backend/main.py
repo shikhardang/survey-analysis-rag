@@ -25,7 +25,10 @@ origins = [
     "http://localhost:3001",
     "https://survey-analysis-rag-o278.vercel.app:3000",        # Your frontend origin
     "http://127.0.0.1:3000",    # Include if you access via 127.0.0.1
-    ""
+    "https://survey-analysis-rag.vercel.app:3000",    # Include if you deploy to Vercel
+    "https://survey-analysis-rag.vercel.app",
+    "https://survey-analysis-rag-o278.vercel.app"
+
 ]
 app.add_middleware(
     CORSMiddleware,
