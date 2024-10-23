@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import pandas as pd
 import numpy as np
@@ -12,44 +13,27 @@ from models import Message, ChatRequest
 from utils import count_tokens, create_faiss_index, summarize_data
 from sentence_transformers import SentenceTransformer
 from typing import Dict, List, Any
-import re
-from starlette.middleware.base import BaseHTTPMiddleware
-from fastapi.responses import Response
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI()
 
-# Define a regex pattern for allowed origins (e.g., any subdomain of .vercel.app)
-ALLOWED_ORIGIN_PATTERN = re.compile(r'^https:\/\/.*\.vercel\.app$')
-
-class CustomCORSMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        origin = request.headers.get('origin')
-        method = request.method
-
-        # Handle preflight (OPTIONS) requests
-        if method == 'OPTIONS':
-            if origin and ALLOWED_ORIGIN_PATTERN.match(origin):
-                response = Response(status_code=200)
-                response.headers['Access-Control-Allow-Origin'] = origin
-                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
-                response.headers['Access-Control-Allow-Credentials'] = 'true'
-                return response
-            else:
-                return JSONResponse(status_code=403, content={"detail": "CORS policy: Origin not allowed."})
-
-        # For actual requests
-        response = await call_next(request)
-        if origin and ALLOWED_ORIGIN_PATTERN.match(origin):
-            response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-        return response
-
-# Add the custom CORS middleware
-app.add_middleware(CustomCORSMiddleware)
+# Enable CORS to allow requests from the frontend
+origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "https://survey-analysis-rag-o278.vercel.app:3000",        # Your frontend origin
+    "http://127.0.0.1:3000",    # Include if you access via 127.0.0.1
+    ""
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,       # Allow requests from these origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -58,30 +42,45 @@ logging.basicConfig(level=logging.INFO)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Initialize SentenceTransformer model
-embedding_model = None  # Load on demand to save memory
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Initialize global variables for datasets and FAISS indices
+datasets: Dict[str, pd.DataFrame] = {}
+embeddings: Dict[str, np.ndarray] = {}
+indices: Dict[str, faiss.IndexFlatL2] = {}
 
 # Parameters
 NUM_SIMILAR_COLUMNS = 5  # Number of similar columns to retrieve
 NUM_SUMMARY_RECORDS = 5  # Number of records to use for summarization
 
-def load_embedding_model():
-    global embedding_model
-    if embedding_model is None:
-        embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        embedding_model.eval()
-
-# FastAPI startup event to validate data directory
+# FastAPI startup event to initialize models and indices
 @app.on_event("startup")
 async def startup_event():
+    global datasets, embeddings, indices
+
     data_directory = "data"
-    if not os.path.exists(data_directory):
+
+    # Load all CSV files in the data directory
+    try:
+        for filename in os.listdir(data_directory):
+            if filename.endswith(".csv"):
+                dataset_name = filename[:-4]  # Remove .csv extension
+                file_path = os.path.join(data_directory, filename)
+                df = pd.read_csv(file_path, encoding="ISO-8859-1")
+                datasets[dataset_name] = df
+
+                # Create embeddings for dataset columns
+                column_embeddings = embedding_model.encode(df.columns.tolist(), convert_to_tensor=False)
+                embeddings[dataset_name] = column_embeddings
+
+                # Build FAISS index
+                index = create_faiss_index(np.array(column_embeddings))
+                indices[dataset_name] = index
+
+                logging.info(f"Dataset '{dataset_name}' loaded and indexed.")
+    except FileNotFoundError:
         logging.error(f"Data directory '{data_directory}' not found. Ensure it contains the CSV files.")
         raise RuntimeError(f"Data directory '{data_directory}' not found.")
-
-# Test endpoint to verify CORS
-@app.get("/test")
-async def test_cors():
-    return {"message": "CORS is working!"}
 
 @app.post("/chat")
 async def chat(chat_request: ChatRequest):
@@ -101,9 +100,6 @@ async def chat(chat_request: ChatRequest):
                 "source_data": None
             }
 
-        # Load embedding model on demand
-        load_embedding_model()
-
         # Encode the query
         logging.info(f"Encoding query: {query_text}")
         query_embedding = embedding_model.encode([query_text], convert_to_tensor=False)[0].reshape(1, -1)
@@ -111,35 +107,18 @@ async def chat(chat_request: ChatRequest):
         retrieved_data = {}
 
         # Iterate over all datasets
-        data_directory = "data"
-        for filename in os.listdir(data_directory):
-            if filename.endswith(".csv"):
-                dataset_name = filename[:-4]  # Remove .csv extension
-                file_path = os.path.join(data_directory, filename)
-                df = pd.read_csv(file_path, encoding="ISO-8859-1")
+        for dataset_name, df in datasets.items():
+            # Retrieve similar columns
+            distances, indices_list = indices[dataset_name].search(query_embedding, NUM_SIMILAR_COLUMNS)
+            similar_columns = df.columns[indices_list.flatten()].tolist()
 
-                # Create embeddings for dataset columns
-                column_embeddings = embedding_model.encode(df.columns.tolist(), convert_to_tensor=False)
+            # Summarize data
+            data_summary = summarize_data(df, similar_columns, num_records=NUM_SUMMARY_RECORDS)
 
-                # Build FAISS index on demand
-                index = create_faiss_index(np.array(column_embeddings))
-
-                # Retrieve similar columns
-                distances, indices_list = index.search(query_embedding, NUM_SIMILAR_COLUMNS)
-                similar_columns = df.columns[indices_list.flatten()].tolist()
-
-                # Summarize data
-                data_summary = summarize_data(df, similar_columns, num_records=NUM_SUMMARY_RECORDS)
-
-                retrieved_data[dataset_name] = {
-                    "columns": similar_columns,
-                    "data_summary": data_summary
-                }
-
-                # Clear memory by deleting large objects
-                del df
-                del column_embeddings
-                del index
+            retrieved_data[dataset_name] = {
+                "columns": similar_columns,
+                "data_summary": data_summary
+            }
 
         # Generate AI response using the specified OpenAI model
         ai_response = await generate_openai_chat(
@@ -191,6 +170,28 @@ async def interpret_query(query_text: str) -> dict:
     except Exception as e:
         logging.error(f"Error interpreting query: {str(e)}")
         return {}
+
+async def analyze_sentiment(text: str) -> str:
+    try:
+        logging.info("Analyzing sentiment...")
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are a sentiment analysis tool. Determine if the sentiment of the following text is Positive, Negative, or Neutral."
+                },
+                {"role": "user", "content": text}
+            ],
+            max_tokens=10,
+            temperature=0.0,
+        )
+        sentiment = response.choices[0].message.content.strip()
+        logging.info(f"Sentiment analysis result: {sentiment}")
+        return sentiment
+    except Exception as e:
+        logging.error(f"Error analyzing sentiment: {str(e)}")
+        return "Unknown"
 
 async def generate_openai_chat(messages: List[Message], retrieved_data: Dict[str, Any], model_name: str, max_tokens: int = 500) -> str:
     try:
@@ -264,6 +265,13 @@ async def generate_openai_chat(messages: List[Message], retrieved_data: Dict[str
         assistant_reply = response.choices[0].message.content.strip()
         logging.info("AI response generated successfully.")
 
+        # Perform sentiment analysis on the user's last message
+        user_message = messages[-1].content
+        sentiment = await analyze_sentiment(user_message)
+
+        # Include sentiment in the assistant's reply
+        assistant_reply += f"\n\nSentiment of your question: {sentiment}"
+
         return assistant_reply
 
     except openai.error.RateLimitError as e:
@@ -276,11 +284,10 @@ async def generate_openai_chat(messages: List[Message], retrieved_data: Dict[str
         logging.error(f"Error generating AI response: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating AI response: {str(e)}")
 
-# Removed the global exception handler to allow CustomCORSMiddleware to function correctly
-# @app.exception_handler(Exception)
-# async def global_exception_handler(request: Request, exc: Exception):
-#     logging.error(f"Unhandled exception: {str(exc)}")
-#     return JSONResponse(
-#         status_code=500,
-#         content={"detail": "An unexpected error occurred. Please try again later."},
-#     )
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logging.error(f"Unhandled exception: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "An unexpected error occurred. Please try again later."},
+    )
