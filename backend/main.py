@@ -1,5 +1,4 @@
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import pandas as pd
 import numpy as np
@@ -13,25 +12,44 @@ from models import Message, ChatRequest
 from utils import count_tokens, create_faiss_index, summarize_data
 from sentence_transformers import SentenceTransformer
 from typing import Dict, List, Any
+import re
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.responses import Response
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI()
 
-# Enable CORS as the first middleware
-origins = [
-    "http://localhost:3000",   # Your frontend origin
-    "http://127.0.0.1:3000",   # Include if you access via 127.0.0.1
-    "https://survey-analysis-rag.vercel.app"  # Your Vercel deployment URL
-]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,       # Allow requests from these origins
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Define a regex pattern for allowed origins (e.g., any subdomain of .vercel.app)
+ALLOWED_ORIGIN_PATTERN = re.compile(r'^https:\/\/.*\.vercel\.app$')
+
+class CustomCORSMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        origin = request.headers.get('origin')
+        method = request.method
+
+        # Handle preflight (OPTIONS) requests
+        if method == 'OPTIONS':
+            if origin and ALLOWED_ORIGIN_PATTERN.match(origin):
+                response = Response(status_code=200)
+                response.headers['Access-Control-Allow-Origin'] = origin
+                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+                response.headers['Access-Control-Allow-Credentials'] = 'true'
+                return response
+            else:
+                return JSONResponse(status_code=403, content={"detail": "CORS policy: Origin not allowed."})
+
+        # For actual requests
+        response = await call_next(request)
+        if origin and ALLOWED_ORIGIN_PATTERN.match(origin):
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response
+
+# Add the custom CORS middleware
+app.add_middleware(CustomCORSMiddleware)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -258,7 +276,7 @@ async def generate_openai_chat(messages: List[Message], retrieved_data: Dict[str
         logging.error(f"Error generating AI response: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating AI response: {str(e)}")
 
-# Removed the global exception handler to allow CORSMiddleware to function correctly
+# Removed the global exception handler to allow CustomCORSMiddleware to function correctly
 # @app.exception_handler(Exception)
 # async def global_exception_handler(request: Request, exc: Exception):
 #     logging.error(f"Unhandled exception: {str(exc)}")
